@@ -13,6 +13,7 @@ import {
 import { BASE64_SIZE_FACTOR, DEFAULT_CHARSET } from './constants.js';
 import { replaceCidReferences } from './cidReplacer.js';
 import { parseAddressHeader } from './addressUtils.js';
+import { sanitizeMimeType } from './sanitizer.js';
 import {
     binaryStringToBase64,
     decodeBase64Text,
@@ -343,11 +344,16 @@ function extractEmailAddresses(str) {
  * @returns {Object} Attachment object
  */
 function createAttachment(filename, mimeType, base64Content, contentId = null) {
+    // Both values come straight from the email file and end up in a data: URL
+    // and in the UI, so they are reduced to what they are supposed to be.
+    const safeMimeType = sanitizeMimeType(mimeType);
+    const safeBase64 = String(base64Content || '').replace(/[^A-Za-z0-9+/=]/g, '');
+
     const attachment = {
         fileName: sanitizeFilename(filename),
-        attachMimeTag: mimeType,
-        contentLength: Math.floor(base64Content.length * BASE64_SIZE_FACTOR),
-        contentBase64: `data:${mimeType};base64,${base64Content}`
+        attachMimeTag: safeMimeType,
+        contentLength: Math.floor(safeBase64.length * BASE64_SIZE_FACTOR),
+        contentBase64: `data:${safeMimeType};base64,${safeBase64}`
     };
 
     if (contentId) {
@@ -640,10 +646,13 @@ function processMsgAttachments(msgReader, attachments) {
         const contentBuffer = Buffer.from(contentUint8Array);
         const contentBase64 = contentBuffer.toString('base64');
 
+        const safeMimeType = sanitizeMimeType(attachment.attachMimeTag);
+
         return {
             ...attachment,
+            attachMimeTag: safeMimeType,
             fileName: resolveMsgAttachmentFilename(attachment, attachmentData.fileName),
-            contentBase64: `data:${attachment.attachMimeTag};base64,${contentBase64}`
+            contentBase64: `data:${safeMimeType};base64,${contentBase64}`
         };
     });
 }

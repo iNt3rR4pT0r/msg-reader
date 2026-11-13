@@ -2,7 +2,14 @@
  * Tests for sanitizer.js
  * Ensures XSS protection and HTML sanitization work correctly
  */
-import { sanitizeHTML, escapeHTML, sanitizeURL, SANITIZE_CONFIG } from '../src/js/sanitizer.js';
+import {
+    sanitizeHTML,
+    escapeHTML,
+    sanitizeURL,
+    sanitizeMimeType,
+    stripRemoteCss,
+    SANITIZE_CONFIG
+} from '../src/js/sanitizer.js';
 
 describe('SANITIZE_CONFIG', () => {
     test('has required allowed tags', () => {
@@ -65,11 +72,69 @@ describe('sanitizeHTML', () => {
         expect(result).toContain('Link');
     });
 
-    test('preserves images with src', () => {
-        const input = '<img src="https://example.com/image.png" alt="Test">';
+    test('preserves embedded images', () => {
+        const input = '<img src="data:image/png;base64,AAAA" alt="Test">';
         const result = sanitizeHTML(input);
-        expect(result).toContain('src="https://example.com/image.png"');
+        expect(result).toContain('src="data:image/png;base64,AAAA"');
         expect(result).toContain('alt="Test"');
+    });
+
+    test('blocks remote images (tracking pixels)', () => {
+        const result = sanitizeHTML('<img src="https://example.com/pixel.gif" alt="Test">');
+        expect(result).not.toContain('example.com');
+        expect(result).toContain('alt="Test"');
+    });
+
+    test('labels blocked images without alt text', () => {
+        const result = sanitizeHTML('<p>x</p><img src="//example.com/pixel.gif">');
+        expect(result).not.toContain('example.com');
+        expect(result).toContain('[external image blocked]');
+    });
+
+    test('removes remote references from style attributes', () => {
+        const result = sanitizeHTML(
+            '<div style="color: red; background: url(https://example.com/bg.png)">x</div>'
+        );
+        expect(result).not.toContain('example.com');
+        expect(result).toContain('color: red');
+    });
+
+    test('removes escaped url() from style attributes', () => {
+        // Hex escapes lose their meaning (the declaration becomes invalid CSS)...
+        const hexEscaped = sanitizeHTML(
+            '<div style="background: u\\72l(https://example.com/bg.png)">x</div>'
+        );
+        expect(hexEscaped).not.toContain('\\');
+        expect(hexEscaped).not.toMatch(/url\s*\(/i);
+
+        // ...and literal escapes collapse into a plain url() that is removed.
+        const literalEscaped = sanitizeHTML(
+            '<div style="background: \\u\\r\\l(https://example.com/bg.png)">x</div>'
+        );
+        expect(literalEscaped).not.toContain('example.com');
+    });
+
+    test('removes remote references from style blocks', () => {
+        const result = sanitizeHTML(
+            '<p>x</p><style>@import url(https://example.com/a.css); p { background: url("https://example.com/b.png"); color: blue; }</style>'
+        );
+        expect(result).not.toContain('example.com');
+        expect(result).not.toContain('@import');
+        expect(result).toContain('color: blue');
+    });
+
+    test('forces links into a new context', () => {
+        const result = sanitizeHTML('<a href="https://example.com/">link</a>');
+        expect(result).toContain('href="https://example.com/"');
+        expect(result).toContain('target="_blank"');
+        expect(result).toContain('rel="noopener noreferrer"');
+    });
+
+    test('drops link targets with unexpected schemes', () => {
+        const result = sanitizeHTML(
+            '<a href="file:///etc/passwd">a</a><a href="data:text/html,x">b</a><a href="ms-msdt:/id">c</a>'
+        );
+        expect(result).not.toContain('href');
     });
 
     test('preserves table structure', () => {
@@ -133,11 +198,15 @@ describe('escapeHTML', () => {
         expect(result).toContain('&amp;');
     });
 
-    test('preserves quotes in text', () => {
-        const input = 'Say "Hello"';
-        const result = escapeHTML(input);
-        // textContent preserves quotes as-is (they don't need escaping in text nodes)
-        expect(result).toContain('"Hello"');
+    test('escapes quotes so the result is safe inside attributes', () => {
+        expect(escapeHTML('Say "Hello"')).toBe('Say &quot;Hello&quot;');
+        expect(escapeHTML("it's")).toBe('it&#39;s');
+        expect(escapeHTML('x" onerror="alert(1)')).not.toContain('"');
+    });
+
+    test('stringifies non-string values', () => {
+        expect(escapeHTML(42)).toBe('42');
+        expect(escapeHTML(0)).toBe('0');
     });
 
     test('handles empty input', () => {
@@ -206,5 +275,48 @@ describe('sanitizeURL', () => {
     test('handles URLs with whitespace', () => {
         const url = '  https://example.com  ';
         expect(sanitizeURL(url)).toBe(url);
+    });
+});
+
+describe('sanitizeMimeType', () => {
+    test('keeps well-formed MIME types', () => {
+        expect(sanitizeMimeType('image/png')).toBe('image/png');
+        expect(sanitizeMimeType('Application/PDF')).toBe('application/pdf');
+        expect(sanitizeMimeType('image/svg+xml')).toBe('image/svg+xml');
+        expect(sanitizeMimeType('application/vnd.ms-outlook')).toBe('application/vnd.ms-outlook');
+        expect(sanitizeMimeType('text/plain; charset=utf-8')).toBe('text/plain');
+    });
+
+    test('rejects markup and attribute breakouts', () => {
+        expect(sanitizeMimeType('application/<img src=x onerror=alert(1)>')).toBe(
+            'application/octet-stream'
+        );
+        expect(sanitizeMimeType('image/x" onerror="alert(1)')).toBe('application/octet-stream');
+        expect(sanitizeMimeType('')).toBe('application/octet-stream');
+        expect(sanitizeMimeType(undefined)).toBe('application/octet-stream');
+    });
+});
+
+describe('stripRemoteCss', () => {
+    test('keeps embedded images', () => {
+        expect(stripRemoteCss('background: url(data:image/png;base64,AAAA)')).toContain(
+            'url(data:image/png;base64,AAAA)'
+        );
+    });
+
+    test('removes remote urls, imports and image-set', () => {
+        const css =
+            '@import "https://a.example/x.css"; a { background: url( \'https://a.example/y\' ); b: image-set("https://a.example/z" 1x); }';
+        const result = stripRemoteCss(css);
+        expect(result).not.toContain('a.example');
+    });
+
+    test('is not fooled by comments inside keywords', () => {
+        expect(stripRemoteCss('background: u/**/rl(https://a.example/y)')).not.toContain('url(');
+    });
+
+    test('handles empty input', () => {
+        expect(stripRemoteCss('')).toBe('');
+        expect(stripRemoteCss(null)).toBe('');
     });
 });

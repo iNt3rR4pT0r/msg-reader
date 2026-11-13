@@ -52,22 +52,28 @@ jobs:
 
     runs-on: ${{ matrix.platform }}
 
+    env:
+      # Forks without an updater signing key still get unsigned-updater
+      # installers; only the auto-update bundles are skipped.
+      HAS_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+
     outputs:
       version: ${{ steps.get-version.outputs.version }}
 
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v7
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
 
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '20'
           cache: 'npm'
 
       - name: Install Rust stable
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@b725eda525362e7cf34af9a7243cac1e3f01a7ec # stable
         with:
+          toolchain: stable
           targets: ${{ matrix.target }}
 
       - name: Install dependencies (Ubuntu)
@@ -125,7 +131,7 @@ jobs:
           npx tauri build ${{ matrix.args }}
 
       - name: Create updater bundle and sign (macOS)
-        if: startsWith(github.ref, 'refs/tags/v') && matrix.platform == 'macos-latest'
+        if: startsWith(github.ref, 'refs/tags/v') && matrix.platform == 'macos-latest' && env.HAS_SIGNING_KEY == 'true'
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -177,7 +183,7 @@ jobs:
           ls -la updater-files/
 
       - name: Create updater bundle and sign (Linux)
-        if: startsWith(github.ref, 'refs/tags/v') && matrix.platform == 'ubuntu-22.04'
+        if: startsWith(github.ref, 'refs/tags/v') && matrix.platform == 'ubuntu-22.04' && env.HAS_SIGNING_KEY == 'true'
         shell: bash
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -231,7 +237,7 @@ jobs:
           ls -la updater-files/
 
       - name: Create updater bundle and sign (Windows)
-        if: startsWith(github.ref, 'refs/tags/v') && matrix.platform == 'windows-latest'
+        if: startsWith(github.ref, 'refs/tags/v') && matrix.platform == 'windows-latest' && env.HAS_SIGNING_KEY == 'true'
         shell: pwsh
         env:
           TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
@@ -323,7 +329,7 @@ jobs:
 
       - name: Upload updater artifacts
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: updater-${{ matrix.updater_target }}
           path: updater-files/
@@ -331,7 +337,7 @@ jobs:
 
       - name: Upload installer artifacts
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
         with:
           name: installer-${{ matrix.updater_target }}
           path: installer-files/
@@ -342,14 +348,17 @@ jobs:
     runs-on: ubuntu-latest
     if: startsWith(github.ref, 'refs/tags/v')
 
+    env:
+      HAS_SIGNING_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY != '' }}
+
     steps:
       - name: Setup Node.js
-        uses: actions/setup-node@v7
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7
         with:
           node-version: '20'
 
       - name: Download all artifacts
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8
         with:
           path: artifacts
 
@@ -375,7 +384,7 @@ jobs:
           - **Windows**: \`.msi\` or \`.exe\` installer
           - **Linux**: \`.AppImage\` or \`.deb\` package
 
-          The app will automatically check for updates." \
+          Security-hardened build. See the commit history for details." \
             --draft \
             2>/dev/null || echo "Release already exists, will upload assets"
 
@@ -400,6 +409,7 @@ jobs:
           done
 
       - name: Upload updater bundles with correct names
+        if: env.HAS_SIGNING_KEY == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
@@ -439,6 +449,7 @@ jobs:
           fi
 
       - name: Create and upload latest.json
+        if: env.HAS_SIGNING_KEY == 'true'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |

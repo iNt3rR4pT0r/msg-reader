@@ -52,6 +52,98 @@ export const SANITIZE_CONFIG = {
 };
 
 /**
+ * Image sources that never trigger a network request.
+ * Remote images are blocked: they are used as tracking pixels and leak the
+ * reader's IP address as soon as a message is opened.
+ */
+const LOCAL_IMAGE_SRC = /^\s*(?:data:image\/|blob:)/i;
+
+/** Link targets that are safe to keep clickable. */
+const SAFE_LINK_HREF = /^\s*(?:https?:|mailto:|tel:|#)/i;
+
+const BLOCKED_IMAGE_ALT = '[external image blocked]';
+
+/**
+ * Removes everything from a CSS string that can trigger a network request
+ * (url(), image-set(), @import, ...). Only embedded data:image URLs survive.
+ * Backslashes are dropped first because CSS escapes (u\72l(...)) would
+ * otherwise hide a url() from the checks below.
+ * @param {string} css - Untrusted CSS (style attribute value or stylesheet)
+ * @returns {string} CSS without remote references
+ */
+export function stripRemoteCss(css) {
+    if (!css) return '';
+
+    return (
+        String(css)
+            .replace(/\\/g, '')
+            // HTML comment tokens and CSS comments can split keywords
+            .replace(/<!--|-->/g, '')
+            .replace(/\/\*[\s\S]*?(?:\*\/|$)/g, '')
+            // @import with or without url()
+            .replace(/@import\b[^;{}]*;?/gi, '')
+            // url(...) unless it is an embedded image
+            .replace(/url\s*\(\s*(['"]?)\s*(?!data:image\/)[^)]*\)?/gi, 'none')
+            // functions that accept bare strings as URLs
+            .replace(/(?:-webkit-)?(?:image-set|cross-fade|image|src)\s*\([^;{}]*/gi, 'none')
+            // legacy script-capable CSS
+            .replace(/expression\s*\(|behavior\s*:|-moz-binding\s*:/gi, 'blocked:')
+    );
+}
+
+let hooksInstalled = false;
+
+/**
+ * Installs the DOMPurify hooks that enforce the "no remote content" policy.
+ * Hooks are global for the DOMPurify instance, so this runs only once.
+ */
+function installHooks() {
+    if (hooksInstalled || typeof DOMPurify.addHook !== 'function') return;
+    hooksInstalled = true;
+
+    DOMPurify.addHook('uponSanitizeElement', (node, data) => {
+        if (data.tagName === 'style' && node.textContent) {
+            node.textContent = stripRemoteCss(node.textContent);
+        }
+    });
+
+    DOMPurify.addHook('afterSanitizeAttributes', (node) => {
+        if (!node || typeof node.getAttribute !== 'function') return;
+
+        if (node.hasAttribute('style')) {
+            const cleaned = stripRemoteCss(node.getAttribute('style'));
+            if (cleaned.trim()) {
+                node.setAttribute('style', cleaned);
+            } else {
+                node.removeAttribute('style');
+            }
+        }
+
+        const tagName = (node.nodeName || '').toLowerCase();
+
+        if (tagName === 'img' && node.hasAttribute('src')) {
+            if (!LOCAL_IMAGE_SRC.test(node.getAttribute('src'))) {
+                node.removeAttribute('src');
+                if (!node.getAttribute('alt')) {
+                    node.setAttribute('alt', BLOCKED_IMAGE_ALT);
+                }
+            }
+        }
+
+        if (tagName === 'a' && node.hasAttribute('href')) {
+            if (SAFE_LINK_HREF.test(node.getAttribute('href'))) {
+                // Never let a link replace the app itself or reach back into it
+                node.setAttribute('target', '_blank');
+                node.setAttribute('rel', 'noopener noreferrer');
+            } else {
+                node.removeAttribute('href');
+                node.removeAttribute('target');
+            }
+        }
+    });
+}
+
+/**
  * Removes problematic MS Office CSS properties that break layout in browsers
  * @param {string} html - HTML content with style attributes
  * @returns {string} HTML with cleaned style attributes
@@ -86,9 +178,9 @@ export function sanitizeHTML(html) {
     // Clean problematic MSO styles before sanitizing
     const cleanedHtml = cleanMsoStyles(html);
 
-    // Create a DOMPurify instance (for browser environment)
     let cleanHTML;
     try {
+        installHooks();
         cleanHTML = DOMPurify.sanitize(cleanedHtml, SANITIZE_CONFIG);
     } catch (error) {
         console.error('Error sanitizing HTML:', error);
@@ -105,10 +197,30 @@ export function sanitizeHTML(html) {
  * @returns {string} HTML-escaped text
  */
 export function escapeHTML(text) {
-    if (!text) return '';
-    const div = document.createElement('div');
-    div.textContent = text;
-    return div.innerHTML;
+    if (text === null || text === undefined || text === '') return '';
+    return String(text)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+const SAFE_MIME_TYPE = /^[a-z0-9][a-z0-9!#$&^_.+-]{0,126}\/[a-z0-9][a-z0-9!#$&^_.+-]{0,126}$/;
+
+/**
+ * Normalizes an untrusted MIME type. Anything that is not a plain
+ * "type/subtype" token falls back to application/octet-stream, so the value
+ * can be used in data: URLs and shown in the UI.
+ * @param {string} mimeType - MIME type taken from the email file
+ * @returns {string} Safe, lower-case MIME type
+ */
+export function sanitizeMimeType(mimeType) {
+    const normalized = String(mimeType || '')
+        .split(';')[0]
+        .trim()
+        .toLowerCase();
+    return SAFE_MIME_TYPE.test(normalized) ? normalized : 'application/octet-stream';
 }
 
 /**

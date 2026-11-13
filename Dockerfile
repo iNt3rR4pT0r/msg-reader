@@ -1,16 +1,26 @@
-FROM node:20-alpine
+FROM node:20-alpine AS build
 
 WORKDIR /app
 
 COPY package*.json ./
-RUN npm install
+RUN npm ci
 
 COPY . .
 
-RUN npm run build
+# The container serves the app from the web root
+RUN npx vite build --base=/
 
-RUN npm install -g serve
+FROM node:20-alpine
+
+RUN npm install -g serve@14
+
+WORKDIR /app
+
+# Only the built static files are shipped - no sources, no node_modules
+COPY --from=build /app/dist ./dist
+
+USER node
 
 EXPOSE 3000
 
-CMD ["serve", "-s", ".", "-l", "3000"]
+CMD ["serve", "-s", "dist", "-l", "3000"]
