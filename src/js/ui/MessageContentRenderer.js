@@ -49,7 +49,7 @@ export class MessageContentRenderer {
 
         const messageContent = `
             <div class="message-header">
-                <div class="message-title pl-6">${msgInfo.subject}</div>
+                <div class="message-title pl-6">${escapeHTML(msgInfo.subject || '')}</div>
                 <div class="message-actions pr-4">
                     <div class="message-export-menu">
                         <button data-action="toggle-export-menu" data-index="${messageIndex}" class="action-button rounded-full" title="export message">
@@ -60,7 +60,7 @@ export class MessageContentRenderer {
                         <div class="message-export-dropdown">
                             <button data-action="export-message" data-index="${messageIndex}" data-format="eml" class="message-export-item">Export as EML</button>
                             <button data-action="export-message" data-index="${messageIndex}" data-format="html" class="message-export-item">Export as HTML</button>
-                            ${canDownloadOriginal ? `<button data-action="export-message" data-index="${messageIndex}" data-format="original" class="message-export-item">Download original ${msgInfo._fileType.toUpperCase()}</button>` : ''}
+                            ${canDownloadOriginal ? `<button data-action="export-message" data-index="${messageIndex}" data-format="original" class="message-export-item">Download original ${escapeHTML(String(msgInfo._fileType).toUpperCase())}</button>` : ''}
                         </div>
                     </div>
                     <button data-action="print-message" data-index="${messageIndex}" class="action-button rounded-full" title="print message">
@@ -345,7 +345,20 @@ export class MessageContentRenderer {
         Array.from(styleTags).forEach((styleTag) => {
             const cssText = styleTag.textContent;
             // Scope all CSS rules to .email-content
-            const scopedCss = cssText.replace(/([^{}]+){/g, '.email-content $1{');
+            const scopedCss = cssText.replace(/([^{}]+){/g, (match, selectors) => {
+                const trimmed = selectors.trim();
+                // At-rules (@media, @font-face, ...) keep their prelude; the
+                // rules nested inside them are scoped by this same callback.
+                if (!trimmed || trimmed.startsWith('@')) return match;
+
+                const scoped = trimmed
+                    .split(',')
+                    .map((selector) => selector.trim())
+                    .filter(Boolean)
+                    .map((selector) => `.email-content ${selector}`)
+                    .join(', ');
+                return `${scoped} {`;
+            });
             styleTag.textContent = scopedCss;
         });
 
@@ -521,8 +534,8 @@ export class MessageContentRenderer {
                                 ${this.getAttachmentItemIcon(attachment)}
                             </div>
                             <div>
-                                <p class="attachment-filename">${attachment.fileName}</p>
-                                <p class="attachment-meta">${attachment.attachMimeTag} - ${attachment.contentLength} bytes</p>
+                                <p class="attachment-filename">${escapeHTML(attachment.fileName)}</p>
+                                <p class="attachment-meta">${escapeHTML(attachment.attachMimeTag)} - ${Number(attachment.contentLength) || 0} bytes</p>
                             </div>
                             <button data-action="download"
                                     data-attachment-index="${index}"
@@ -547,8 +560,8 @@ export class MessageContentRenderer {
                             ${this.getAttachmentItemIcon(attachment)}
                         </div>
                         <div>
-                            <p class="attachment-filename">${attachment.fileName}</p>
-                            <p class="attachment-meta">${attachment.attachMimeTag} - ${attachment.contentLength} bytes</p>
+                            <p class="attachment-filename">${escapeHTML(attachment.fileName)}</p>
+                            <p class="attachment-meta">${escapeHTML(attachment.attachMimeTag)} - ${Number(attachment.contentLength) || 0} bytes</p>
                         </div>
                         <div class="ml-auto pl-2 attachment-download-btn">
                             <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-4 h-4">
@@ -574,7 +587,7 @@ export class MessageContentRenderer {
         const isEml = this.attachmentModal?.isPreviewableEml(attachment.attachMimeTag);
 
         if (isImage) {
-            return `<img src="${attachment.contentBase64}" alt="Attachment" class="w-10 h-10 object-cover">`;
+            return `<img src="${escapeHTML(attachment.contentBase64)}" alt="Attachment" class="w-10 h-10 object-cover">`;
         }
 
         if (isPdf) {

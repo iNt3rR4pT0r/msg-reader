@@ -20,6 +20,24 @@ function getVersion() {
 
 const version = getVersion();
 
+// Content Security Policy for the web build. The desktop app gets its policy
+// from src-tauri/tauri.conf.json instead (Tauri has to add its own nonces).
+// It is the second line of defense behind the HTML sanitizer: even if markup
+// from an email slipped through, it could neither run scripts nor contact a
+// remote server.
+const WEB_CSP = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob:",
+  "font-src 'self' data:",
+  "object-src 'self' blob:",
+  "frame-src 'self' blob:",
+  "connect-src 'self'",
+  "base-uri 'none'",
+  "form-action 'none'",
+].join('; ');
+
 export default defineConfig({
   root: '.',
   // Use root path for Tauri, /msg-reader/ for GitHub Pages
@@ -34,6 +52,17 @@ export default defineConfig({
         process: true,
       },
     }),
+    {
+      name: 'web-content-security-policy',
+      apply: 'build',
+      transformIndexHtml(html) {
+        if (isTauri) return html;
+        return html.replace(
+          '<meta charset="UTF-8">',
+          `<meta charset="UTF-8">\n    <meta http-equiv="Content-Security-Policy" content="${WEB_CSP}">`
+        );
+      },
+    },
     {
       name: 'html-version-replace',
       transformIndexHtml(html) {

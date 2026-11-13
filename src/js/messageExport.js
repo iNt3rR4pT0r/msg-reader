@@ -1,4 +1,4 @@
-import { escapeHTML } from './sanitizer.js';
+import { escapeHTML, sanitizeHTML } from './sanitizer.js';
 import { textToBase64 } from './encoding.js';
 import {
     formatAddressHeader,
@@ -325,9 +325,16 @@ export function messageToHtmlDocument(message) {
         )
         .join(', ');
 
-    const bodyHtml =
-        message?.bodyContentHTML || `<pre>${escapeHTML(message?.bodyContent || '')}</pre>`;
-    const { regularAttachments } = partitionAttachments(bodyHtml, message?.attachments || []);
+    const rawBodyHtml = message?.bodyContentHTML || '';
+    // The exported file is opened straight in a browser, so the body must be
+    // sanitized here as well - otherwise scripts from the email would run there.
+    const bodyHtml = rawBodyHtml
+        ? sanitizeHTML(rawBodyHtml)
+        : `<pre>${escapeHTML(message?.bodyContent || '')}</pre>`;
+    const { regularAttachments } = partitionAttachments(
+        rawBodyHtml || bodyHtml,
+        message?.attachments || []
+    );
     const headerMap = getHeaderMap(message);
     const replyTo = getRawHeader(message, 'reply-to');
     const messageId = getRawHeader(message, 'message-id') || message?.messageId || '';
@@ -342,7 +349,7 @@ export function messageToHtmlDocument(message) {
                     .map(
                         (attachment) => `
                 <li>
-                    <a href="${attachment.contentBase64}" download="${escapeHTML(attachment.fileName || 'attachment')}">${escapeHTML(attachment.fileName || 'attachment')}</a>
+                    <a href="${escapeHTML(attachment.contentBase64)}" download="${escapeHTML(attachment.fileName || 'attachment')}">${escapeHTML(attachment.fileName || 'attachment')}</a>
                     <span>${escapeHTML(attachment.attachMimeTag || 'application/octet-stream')}</span>
                 </li>`
                     )
@@ -355,6 +362,7 @@ export function messageToHtmlDocument(message) {
 <html lang="en">
 <head>
     <meta charset="UTF-8">
+    <meta http-equiv="Content-Security-Policy" content="default-src 'none'; img-src data:; style-src 'unsafe-inline'; base-uri 'none'; form-action 'none'">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>${escapeHTML(message?.subject || 'Message')}</title>
     <style>

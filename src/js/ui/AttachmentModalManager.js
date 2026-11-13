@@ -3,6 +3,7 @@ import { extractEml } from '../utils.js';
 import { dataUrlToArrayBuffer, decodeDataUrlText, getDataUrlBase64 } from '../encoding.js';
 import { formatContact, getContactEmail } from '../addressUtils.js';
 import { pdfAttachmentsOpenInApp } from '../UserPreferences.js';
+import { escapeHTML, sanitizeHTML } from '../sanitizer.js';
 
 /**
  * Manages the attachment preview modal
@@ -396,7 +397,11 @@ export class AttachmentModalManager {
      */
     _openPdfExternally(attachment) {
         if (isTauri()) {
-            openWithSystemViewer(attachment.contentBase64, attachment.fileName).catch((err) => {
+            // The backend only hands real PDFs with a .pdf name to the system
+            // viewer, so attachments identified by MIME type get the extension.
+            const baseName = attachment.fileName || 'attachment';
+            const pdfName = /\.pdf$/i.test(baseName) ? baseName : `${baseName}.pdf`;
+            openWithSystemViewer(attachment.contentBase64, pdfName).catch((err) => {
                 console.error('Failed to open PDF with system viewer:', err);
                 if (this.showToast) {
                     this.showToast('Failed to open PDF', 'error');
@@ -950,7 +955,7 @@ export class AttachmentModalManager {
                 if (field.value) {
                     const row = document.createElement('div');
                     row.className = 'nested-email-header-row';
-                    row.innerHTML = `<span class="nested-email-label">${field.label}:</span> <span class="nested-email-value">${this.escapeHtml(field.value)}</span>`;
+                    row.innerHTML = `<span class="nested-email-label">${escapeHTML(field.label)}:</span> <span class="nested-email-value">${escapeHTML(field.value)}</span>`;
                     headerSection.appendChild(row);
                 }
             });
@@ -962,30 +967,25 @@ export class AttachmentModalManager {
             bodySection.className = 'nested-email-body';
 
             if (emailData.bodyContentHTML) {
-                // Create a sandboxed iframe for HTML content
+                // The nested body is untrusted: sanitize it exactly like the main
+                // message and render it in a fully sandboxed iframe (no scripts,
+                // no same-origin access, no navigation, no popups).
                 const iframe = document.createElement('iframe');
                 iframe.className = 'nested-email-iframe';
-                iframe.sandbox = 'allow-same-origin';
+                iframe.setAttribute('sandbox', '');
+                iframe.setAttribute('referrerpolicy', 'no-referrer');
+                iframe.srcdoc = `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+body { font-family: system-ui, -apple-system, sans-serif; font-size: 14px; margin: 1rem; color: #333; }
+img { max-width: 100%; height: auto; }
+</style>
+</head>
+<body>${sanitizeHTML(emailData.bodyContentHTML)}</body>
+</html>`;
                 bodySection.appendChild(iframe);
-
-                // Write content after iframe is in DOM
-                setTimeout(() => {
-                    const doc = iframe.contentDocument || iframe.contentWindow.document;
-                    doc.open();
-                    doc.write(`
-                        <!DOCTYPE html>
-                        <html>
-                        <head>
-                            <style>
-                                body { font-family: system-ui, -apple-system, sans-serif; font-size: 14px; margin: 1rem; color: #333; }
-                                img { max-width: 100%; height: auto; }
-                            </style>
-                        </head>
-                        <body>${emailData.bodyContentHTML}</body>
-                        </html>
-                    `);
-                    doc.close();
-                }, 0);
             } else if (emailData.bodyContent) {
                 const pre = document.createElement('pre');
                 pre.className = 'nested-email-text';
@@ -999,7 +999,7 @@ export class AttachmentModalManager {
             if (emailData.attachments && emailData.attachments.length > 0) {
                 const attachmentsSection = document.createElement('div');
                 attachmentsSection.className = 'nested-email-attachments';
-                attachmentsSection.innerHTML = `<div class="nested-email-attachments-title">Attachments (${emailData.attachments.length})</div>`;
+                attachmentsSection.innerHTML = `<div class="nested-email-attachments-title">Attachments (${Number(emailData.attachments.length) || 0})</div>`;
 
                 const attachmentsList = document.createElement('div');
                 attachmentsList.className = 'nested-email-attachments-list';
@@ -1014,7 +1014,7 @@ export class AttachmentModalManager {
                     // Icon selection helper
                     const getIcon = () => {
                         if (isImage) {
-                            return `<img src="${att.contentBase64}" alt="Attachment" class="w-10 h-10 object-cover">`;
+                            return `<img src="${escapeHTML(att.contentBase64)}" alt="Attachment" class="w-10 h-10 object-cover">`;
                         } else if (isPdf) {
                             return `<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" class="w-6 h-6 text-red-500">
                                 <path stroke-linecap="round" stroke-linejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 0 0-3.375-3.375h-1.5A1.125 1.125 0 0 1 13.5 7.125v-1.5a3.375 3.375 0 0 0-3.375-3.375H8.25m2.25 0H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 0 0-9-9Z" />
@@ -1048,8 +1048,8 @@ export class AttachmentModalManager {
                                 ${getIcon()}
                             </div>
                             <div class="flex-1 min-w-0">
-                                <p class="attachment-filename">${this.escapeHtml(att.fileName)}</p>
-                                <p class="attachment-meta">${att.attachMimeTag} - ${this.formatFileSize(att.contentLength)}</p>
+                                <p class="attachment-filename">${escapeHTML(att.fileName)}</p>
+                                <p class="attachment-meta">${escapeHTML(att.attachMimeTag)} - ${escapeHTML(this.formatFileSize(att.contentLength))}</p>
                             </div>
                             <button class="ml-auto pl-2 attachment-download-btn nested-download-btn"
                                     title="Download">
@@ -1080,8 +1080,8 @@ export class AttachmentModalManager {
                                 ${getIcon()}
                             </div>
                             <div class="flex-1 min-w-0">
-                                <p class="attachment-filename">${this.escapeHtml(att.fileName)}</p>
-                                <p class="attachment-meta">${att.attachMimeTag} - ${this.formatFileSize(att.contentLength)}</p>
+                                <p class="attachment-filename">${escapeHTML(att.fileName)}</p>
+                                <p class="attachment-meta">${escapeHTML(att.attachMimeTag)} - ${escapeHTML(this.formatFileSize(att.contentLength))}</p>
                             </div>
                             <div class="ml-auto pl-2 attachment-download-btn">
                                 ${downloadIcon}
